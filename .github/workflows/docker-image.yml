@@ -13,7 +13,7 @@ jobs:
         
       - name: Start PostgreSQL container
         run: |
-          docker run -d --name postgres \
+          sudo docker run -d --name postgres \
             -e POSTGRES_DB=kubsu \
             -e POSTGRES_USER=kubsu \
             -e POSTGRES_PASSWORD=kubsu \
@@ -28,11 +28,11 @@ jobs:
           done
 
       - name: Build test Docker image
-        run: docker build --target builder -t myapp:test .
+        run: sudo docker build --target builder -t myapp:test .
 
       - name: Run tests
         run: |
-          docker run --rm \
+          sudo docker run --rm \
             --network host \
             -e PYTHONPATH=/app \
             myapp:test pytest tests
