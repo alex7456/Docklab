@@ -10,13 +10,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-
+        
       - name: Start PostgreSQL container
         run: |
           sudo docker run -d --name postgres \
-            -e POSTGRES_DB=${{ secrets.DB_NAME }} \
-            -e POSTGRES_USER=${{ secrets.DB_USER }} \
-            -e POSTGRES_PASSWORD=${{ secrets.DB_PASSWORD }}
+            -e POSTGRES_DB=kubsu \
+            -e POSTGRES_USER=kubsu \
+            -e POSTGRES_PASSWORD=kubsu \
             -p 5432:5432 \
             postgres:14
           sleep 10
