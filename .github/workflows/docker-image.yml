@@ -2,90 +2,63 @@ name: Docker Build, Test and Deploy
 
 on:
   push:
-    branches: [ "master" ]
-  pull_request:
-    branches: [ "master" ]
-
-# env:
-#   DOCKER_IMAGE: creatior3/users-proj:latest
-#   SERVER_SSH: ${{ secrets.SERVER_SSH }}
-#   SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+    branches: [main]
 
 jobs:
-  build:
-    name: Build
-    runs-on: self-hosted
+  build-test-deploy: 
+    runs-on: self-hosted 
     steps:
-      - name: Add all repository
+      - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Build all images
-        run: docker-compose build
-      
-      - name: Check existence images
+      - name: Start PostgreSQL container
         run: |
-          docker image inspect postgres:13-alpine
-          docker image inspect users-proj_web
+          sudo docker run -d --name postgres \
+            -e POSTGRES_DB=${{ secrets.DB_NAME }} \
+            -e POSTGRES_USER=${{ secrets.DB_USER }} \
+            -e POSTGRES_PASSWORD=${{ secrets.DB_PASSWORD }}
+            -p 5432:5432 \
+            postgres:14
+          sleep 10
 
-  test:
-    name: Testing
-    runs-on: self-hosted
-    needs: build
-    env:
-      DB_USER: ${{ secrets.DB_USER }}
-      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-      DB_NAME: ${{ secrets.DB_NAME }}
-    steps:
-      - uses: actions/checkout@v3
-      
-      - name: Build test image
-        run: docker-compose build test
-      
-      - name: Start dependencies
-        run: docker-compose up -d db 
-      
-      - name: Wait for Postgres
+      - name: Wait for PostgreSQL
         run: |
-          for i in {1..5}; do
-            docker-compose exec -T db pg_isready -U ${{ secrets.DB_USER }} && break
-            echo "Waiting for Postgres: ($i/5)"
-            sleep 10
+          until sudo docker exec postgres pg_isready -U ${{ secrets.DB_USER }}; do
+            sleep 3
           done
-      
+
+      - name: Build test Docker image
+        run: sudo docker build --target builder -t myapp:test .
+
       - name: Run tests
-        run: docker-compose run --rm test
-      
-      - name: Cleanup
-        run: docker-compose down -v
-      
-      - name: Clean working directory
-        run: rm -rf $GITHUB_WORKSPACE/*
-
-  deploy:
-    name: Deploy
-    runs-on: self-hosted
-    needs: test
-    
-    defaults:
-      run:
-        shell: bash
-
-    steps:
-      - name: Create tar files
         run: |
-          docker save -o image_web.tar users-proj_web
+          sudo docker run --rm \
+            --network host \
+            -e PYTHONPATH=/app \
+            myapp:test pytest tests
 
-      - name: Delete pythonapp image
-        run: docker rmi users-proj_web
-      
-      - name: Push tar files and docker-compose.yml on server
-        run: |
-          scp -P ${{ secrets.SERVER_PORT }} /home/creatior/actions-runner/_work/users-proj/users-proj/image_web.tar ${{ secrets.SERVER_USERNAME }}@${{ secrets.SERVER_ADDRESS}}:/home/${{ secrets.SERVER_USERNAME }}/tasks/docker
+      - name: Build production Docker image
+        run: sudo docker build -t myapp:final .
 
-      - name: Connect to server and start app
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.5.4 
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Deploy to remote server
         run: |
-          ssh -p ${{ secrets.SERVER_PORT }} ${{ secrets.SERVER_USERNAME }}@${{ secrets.SERVER_ADDRESS}} "cd /home/${{ secrets.SERVER_USERNAME }}/tasks/docker && \
-          podman-compose down -v && \
-          podman load -i image_web.tar && \
-          podman-compose up --build -d && \
-          rm image_web.tar"
+          # Экспорт образа и загрузка на удаленный сервер
+          sudo docker save myapp:final | ssh -o StrictHostKeyChecking=no \
+            -p ${{ secrets.SERVER_PORT }} \
+            ${{ secrets.SERVER_USERNAME }}@${{ secrets.SERVER_ADDRESS }} \
+            "podman load && podman tag myapp:final myapp:final"
+          
+          # Остановка и запуск контейнера
+          ssh -o StrictHostKeyChecking=no \
+            -p ${{ secrets.SERVER_PORT }} \
+            ${{ secrets.SERVER_USERNAME }}@${{ secrets.SERVER_ADDRESS }} \
+            "podman stop myapp || true && \
+             podman rm myapp || true && \
+             podman run -d --name myapp \
+             --network=host \
+             myapp:final"
